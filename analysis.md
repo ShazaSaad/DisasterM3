@@ -103,3 +103,138 @@ Adding a new model family requires modifying `models/__init__.py` directly: crea
 ### L7: Unrelated Utilities Mixed Into the Model Module
 
 `models/__init__.py` contains low-level image and video processing functions (`build_transform`, `dynamic_preprocess`, `load_video`, `load_video_frame_np`) alongside the model abstraction classes. These utilities are not part of the model interface — they are preprocessing helpers — and their presence in the model module makes the file harder to read, harder to test, and misleading about what the module is responsible for.
+
+---
+
+## 4. Is the Framework Tied to a Specific Dataset?
+
+**Yes.** The coupling is not in one place but spread across four separate points in `run_vllm.py`, meaning there is no single clean extension point. Each one must be touched independently to support a new dataset.
+
+### Coupling Point 1: Hardcoded Data Path
+
+```python
+PROJECT_ROOT = dirname(dirname(dirname(abspath(__file__))))
+subset_json = join(f"{PROJECT_ROOT}/data", f"{args.subset}.json")
+```
+
+The data directory is derived by walking three levels up from the script's location. Any dataset must be placed inside this specific folder structure. There is no `--data_dir` argument or configurable root path.
+
+### Coupling Point 2: Hardcoded Subset Names
+
+```python
+if subset in ["bearing_body", "building_damage_counting", "disaster_type", "road_damage_counting"]:
+    ...
+elif subset in ["landuse", "relational_reasoning_qa"]:
+    ...
+elif subset in ["caption", "recovery"]:
+    ...
+else:
+    raise ValueError('Unknown subset {}'.format(subset))
+```
+
+The message construction function `get_messages_from_data()` only recognises DisasterM3's 8 subset names. Passing any other dataset name raises `ValueError` immediately — the script does not fail gracefully or suggest alternatives.
+
+### Coupling Point 3: Hardcoded Prompt Templates
+
+All 8 task prompts are defined as a Python dictionary at the top of the script:
+
+```python
+prompt_libs = {
+    "bearing_body": "...<DisasterM3-specific instruction>...",
+    "building_damage_counting": "...",
+    ...
+}
+```
+
+These prompts are written specifically for DisasterM3 tasks and assume DisasterM3 answer options. A different dataset with different task instructions and different answer choices has no mechanism to inject its own prompts without modifying this dictionary directly.
+
+### Coupling Point 4: Hardcoded Image Field Names
+
+The image paths are extracted by looking for specific JSON keys that only exist in DisasterM3's annotation format:
+
+```python
+pre_image  = item["pre_image_path"]
+post_image = item["post_image_path"]
+# or for single-image subsets:
+image      = item["image_path"]
+```
+
+A dataset like MONITRS (which uses sequences of images referenced differently) or EarthVQA (which pairs images with segmentation masks) would produce `KeyError` on these field names.
+
+### What should I do to Add MONITRS??
+
+To add MONITRS support to the current codebase without any redesign, a developer would need to make **five separate edits** across `run_vllm.py`:
+
+1. Add a new `elif` branch in `get_messages_from_data()` for each MONITRS task type
+2. Add new MONITRS prompt strings to the `prompt_libs` dictionary
+3. Add MONITRS-specific image field name handling to the image loading block
+4. Place MONITRS JSON files inside `{PROJECT_ROOT}/data/` alongside DisasterM3 files
+5. Verify the output path logic produces sensible filenames for MONITRS results
+
+Every one of these edits modifies existing shared code rather than adding new isolated code. Any mistake risks breaking DisasterM3 at the same time. This is precisely the problem that a proper dataset abstraction layer solves.
+
+---
+
+## 5. Proposed Modular Redesign
+
+The redesign follows the pipeline principle from the internship brief:
+
+```
+Dataset → Model Runner → Evaluator → Experiment Tracker
+```
+
+Each stage is an isolated module that communicates with the others only through well-defined interfaces. Adding a new dataset, model, or evaluator means adding a new file.
+
+### Target Directory Structure
+
+```
+framework/
+├── configs/
+│   ├── disasterm3_qwen.yaml       ← one config file per experiment
+│   └── monitrs_internvl.yaml
+├── datasets/
+│   ├── base.py                    ← abstract BaseDataset class
+│   ├── disasterm3.py              ← DisasterM3 adapter
+│   ├── monitrs.py                 ← MONITRS adapter
+│   └── earthvqa.py                ← EarthVQA adapter
+├── models/
+│   ├── base.py                    ← abstract BaseModelRunner
+│   ├── qwen_runner.py             ← QwenVL (cleaned from models/__init__.py)
+│   ├── internvl_runner.py         ← InternVL
+│   └── llava_runner.py            ← LLaVA
+├── evaluation/
+│   ├── base.py                    ← abstract BaseEvaluator
+│   ├── vqa.py                     ← accuracy, BLEU, METEOR, ROUGE-L
+│   └── damage_assessment.py       ← per-class accuracy, RMSE
+├── experiments/
+│   ├── runner.py                  ← orchestrates the full pipeline
+│   └── tracker.py                 ← MLflow / W&B logging wrapper
+├── utils/
+│   └── image_utils.py             ← image preprocessing (moved from models/__init__.py)
+└── main.py                        ← entry point: reads config, runs experiment
+```
+
+### How Each Limitation Is Resolved
+
+| Limitation | Resolution |
+|---|---|
+| **L1** No dataset abstraction | `BaseDataset` abstract class with `load()`, `__getitem__()`, `__len__()`. Each dataset is a separate adapter file. The pipeline never knows which dataset is loaded. |
+| **L2** No evaluation | Dedicated `evaluation/` module. Each evaluator exposes `update(pred, gt)` per sample and `compute()` for final metrics. Pattern adapted from EarthVQA's `VQA_OA_Metric` and MONITRS's `eval.py`. |
+| **L3** No config system | YAML files in `configs/` control dataset, model, evaluator, and output path. `main.py` reads the config (nothing is hardcoded in Python). |
+| **L4** No experiment tracking | `experiments/tracker.py` wraps MLflow or W&B. Logs dataset, model, task, metrics, and runtime automatically after each evaluation run. |
+| **L5** Tight coupling | Each stage lives in its own module. `datasets/` only loads data. `models/` only runs inference. `evaluation/` only computes metrics. `experiments/runner.py` connects them through abstract interfaces. |
+| **L6** Model extension requires source edits | New models added as new files in `models/` inheriting `BaseModelRunner`. Config file references the class by name. Zero changes to existing files. |
+| **L7** Utilities mixed into model module | Image/video helpers moved to `utils/image_utils.py`. `models/` contains only runner logic. |
+
+### What Is Reused vs. Redesigned
+
+| Component | Source | Treatment |
+|---|---|---|
+| `ModelConfig` abstract class | DisasterM3 `models/__init__.py` | Renamed `BaseModelRunner`, moved to `models/base.py`, interface preserved |
+| `QwenVL`, `InternVL`, `Llava` | DisasterM3 `models/__init__.py` | Split into separate files, preprocessing utilities removed |
+| `build_model_config()` factory | DisasterM3 `models/__init__.py` | Replaced by config-driven class instantiation |
+| MCQ accuracy, BLEU, METEOR, ROUGE-L | MONITRS `Evaluate/eval.py` | Adapted into `evaluation/vqa.py` evaluator class |
+| `EarthVQADataset` class pattern | EarthVQA `data/earthvqa.py` | Used as the template for `BaseDataset` and all concrete adapters |
+| Config dict pattern | EarthVQA `configs/earthvqa.py` | Upgraded to YAML files in `configs/` |
+| Prompt templates | DisasterM3 `run_vllm.py` | Moved into dataset adapters or YAML config files |
+| Experiment tracking | — | Entirely new — not present in any of the three repos |
