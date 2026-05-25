@@ -41,17 +41,44 @@ DisasterM3 includes 26,988 bi-temporal satellite images and 123k instruction pai
 - 2025/09/22, Our paper got accepted by NeurIPS 2025.
 
 
+## Setup
+
+### Requirements
+- Linux or WSL2 (vllm does not support Windows natively)
+- Python 3.8+
+- NVIDIA GPU with CUDA support (minimum 16GB VRAM for 7B models)
+- CUDA 11.8 or higher
+
+### Installation
+```bash
+pip install vllm transformers pillow tqdm
+```
+
+### Dataset
+Request dataset access via the [Google Form](https://forms.gle/APQpmyuThh28HsJdA).
+After approval, place the files as follows:
+```
+DisasterM3/
+└── data/
+    ├── bearing_body.json
+    ├── building_damage_counting.json
+    ├── disaster_type.json
+    ├── ... (other subset JSONs)
+    └── images/
+        └── ... (satellite image files)
+```
+
 ## Benchmark
 
 Please run this code for benchmarking the DisasterM3 dataset.
 Two examples:
 Qwen2.5 VL:
 ```
-python disaster_m3/pyscripts/run_vllm.py --model_id Qwen/Qwen2.5-VL-7B-Instruct --subset bearing_body
+python pyscripts/run_vllm.py --model_id Qwen/Qwen2.5-VL-7B-Instruct --subset bearing_body
 ```
 InternVL3:
 ```
-python disaster_m3/pyscripts/run_vllm.py --model_id OpenGVLab/InternVL3-78B --subset report
+python pyscripts/run_vllm.py --model_id OpenGVLab/InternVL3-78B --subset report
 ```
 
 
