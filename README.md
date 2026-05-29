@@ -115,3 +115,18 @@ All images and their associated annotations in DisasterM3 can be used for academ
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=Junjue-Wang/DisasterM3&type=Date)](https://www.star-history.com/#Junjue-Wang/DisasterM3&Date)
+
+---
+
+## Preparatory Tasks (Entry Submission)
+
+| Task | File | Description |
+|---|---|---|
+| Task 1 | `vision_tasks.md` | Classification vs Detection vs Segmentation |
+| Task 2 | `evaluation_methodology.md` | How VLMs are evaluated |
+| Task 3 | `analysis.md` | DisasterM3 repo analysis and redesign proposal |
+| Task 4 | `execution_notes.md` | Execution attempt and reproducibility issues |
+| Task 5 | `datasets/base.py`, `datasets/disasterm3.py` | Dataset abstraction layer |
+| Task 6 | `reuse_analysis.md` | MONITRS evaluator pattern analysis |
+| Task 7 | `DisasterM3_paper_summary.md` | Paper summary (bonus) |
+| Task 8 | `datasets/monitrs.py` | MONITRS adapter (bonus) |
